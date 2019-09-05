@@ -134,7 +134,7 @@ fn run_repl() []string {
 			mut temp_line := line
 			mut temp_flag := false
 			func_call := r.function_call(line)
-			if !(line.contains(' ') || line.contains(':') || line.contains('=') || line.contains(',') || line == '') && !func_call {
+			if !(line.contains(':') || line.contains('=') || line.contains(',') || line == '') && !func_call {
 				temp_line = 'println($line)'
 				temp_flag = true
 			}
