@@ -23,16 +23,17 @@ mut:
 	fmt_out        strings.Builder
 	fmt_indent     int
 	fmt_line_empty bool
-	prev_tok Token 
+	prev_tok Token
 }
 
-fn new_scanner(file_path string) *Scanner {
+fn new_scanner(file_path string) &Scanner {
 	if !os.file_exists(file_path) {
-		panic('"$file_path" doesn\'t exist')
+		cerror('"$file_path" doesn\'t exist')
 	}
 
 	mut raw_text := os.read_file(file_path) or {
-		panic('scanner: failed to open "$file_path"')
+		cerror('scanner: failed to open "$file_path"')
+		return 0
 	}
 
 	// BOM check
@@ -145,6 +146,9 @@ fn (s mut Scanner) ident_dec_number() string {
 		for s.pos < s.text.len && s.text[s.pos].is_digit() {
 			s.pos++
 		}
+		if !s.inside_string && s.pos < s.text.len && s.text[s.pos] == `f` {
+			s.error('no `f` is needed for floats')
+		}
 	}
 
 	// scan exponential part
@@ -207,7 +211,7 @@ fn (s Scanner) has_gone_over_line_end() bool {
 
 fn (s mut Scanner) skip_whitespace() {
 	for s.pos < s.text.len && s.text[s.pos].is_white() {
-		// Count \r\n as one line 
+		// Count \r\n as one line
 		if is_nl(s.text[s.pos]) && !s.expect('\r\n', s.pos-1) {
 			s.line_nr++
 		}
@@ -216,10 +220,10 @@ fn (s mut Scanner) skip_whitespace() {
 }
 
 fn (s mut Scanner) scan() ScanRes {
-	if s.line_comment != '' { 
+	if s.line_comment != '' {
 		//s.fgenln('// LOL "$s.line_comment"')
-		//s.line_comment = '' 
-	} 
+		//s.line_comment = ''
+	}
 	if s.started {
 		s.pos++
 	}
@@ -264,7 +268,7 @@ fn (s mut Scanner) scan() ScanRes {
 		// at the next ', skip it
 		if s.inside_string {
 			if next_char == `\'` {
-				s.pos++
+				s.dollar_end = true
 				s.dollar_start = false
 				s.inside_string = false
 			}
@@ -332,7 +336,7 @@ fn (s mut Scanner) scan() ScanRes {
 		// TODO allow double quotes
 		// case QUOTE:
 		// return scan_res(.str, s.ident_string())
-	case `\``:
+	case `\``: // ` // apostrophe balance comment. do not remove
 		return scan_res(.chartoken, s.ident_char())
 	case `(`:
 		return scan_res(.lpar, '')
@@ -388,11 +392,11 @@ fn (s mut Scanner) scan() ScanRes {
 	case `,`:
 		return scan_res(.comma, '')
 	case `@`:
-		s.pos++ 
+		s.pos++
 		name := s.ident_name()
 		if !is_key(name) {
-			s.error('@ must be used before keywords (e.g. `@type string`)') 
-		} 
+			s.error('@ must be used before keywords (e.g. `@type string`)')
+		}
 		return scan_res(.name, name)
 	case `\r`:
 		if nextc == `\n` {
@@ -477,7 +481,7 @@ fn (s mut Scanner) scan() ScanRes {
 		else if nextc == `>` {
 			s.pos++
 			return scan_res(.arrow, '')
-		} 
+		}
 		else {
 			return scan_res(.assign, '')
 		}
@@ -515,7 +519,7 @@ fn (s mut Scanner) scan() ScanRes {
 			s.line_comment = s.text.substr(start + 1, s.pos)
 			s.line_comment = s.line_comment.trim_space()
 			s.fgenln('// ${s.prev_tok.str()} "$s.line_comment"')
-			// Skip the comment (return the next token) 
+			// Skip the comment (return the next token)
 			return s.scan()
 		}
 		// Multiline comments
@@ -553,20 +557,52 @@ fn (s mut Scanner) scan() ScanRes {
 	$if windows {
 		if c == `\0` {
 			return scan_res(.eof, '')
-		} 
-	} 
-	mut msg := 'invalid character `${c.str()}`' 
+		}
+	}
+	mut msg := 'invalid character `${c.str()}`'
 	if c == `"` {
-		msg += ', use \' to denote strings' 
-	} 
-	s.error(msg) 
+		msg += ', use \' to denote strings'
+	}
+	s.error(msg)
 	return scan_res(.eof, '')
 }
 
+fn (s &Scanner) find_current_line_start_position() int {
+	if s.pos >= s.text.len {
+		return s.pos
+	}
+  mut linestart := s.pos
+  for {
+    if linestart <= 0  {break}
+    if s.text[linestart] == 10 || s.text[linestart] == 13 { break }
+    linestart--
+  }
+  return linestart
+}
+
 fn (s &Scanner) error(msg string) {
-	file := s.file_path.all_after('/')
-	println('$file:${s.line_nr + 1} $msg')
+	fullpath := os.realpath( s.file_path )
+	column := s.pos - s.find_current_line_start_position()
+	// The filepath:line:col: format is the default C compiler
+	// error output format. It allows editors and IDE's like
+	// emacs to quickly find the errors in the output
+	// and jump to their source with a keyboard shortcut.
+	// Using only the filename leads to inability of IDE/editors
+	// to find the source file, when it is in another folder.
+	println('${fullpath}:${s.line_nr + 1}:$column: $msg')
 	exit(1)
+}
+
+
+fn (s Scanner) count_symbol_before(p int, sym byte) int {
+  mut count := 0
+  for i:=p; i>=0; i-- {
+    if s.text[i] != sym {
+      break
+    }
+    count++
+  }
+  return count
 }
 
 // println('array out of bounds $idx len=$a.len')
@@ -601,14 +637,14 @@ fn (s mut Scanner) ident_string() string {
 			s.error('0 character in a string literal')
 		}
 		// ${var}
-		if c == `{` && prevc == `$` {
+		if c == `{` && prevc == `$` && s.count_symbol_before(s.pos-2, `\\`) % 2 == 0 {
 			s.inside_string = true
 			// so that s.pos points to $ at the next step
 			s.pos -= 2
 			break
 		}
 		// $var
-		if (c.is_letter() || c == `_`) && prevc == `$` {
+		if (c.is_letter() || c == `_`) && prevc == `$` && s.count_symbol_before(s.pos-2, `\\`) % 2 == 0 {
 			s.inside_string = true
 			s.dollar_start = true
 			s.pos -= 2
@@ -643,7 +679,7 @@ fn (s mut Scanner) ident_char() string {
 			len++
 		}
 		double_slash := s.expect('\\\\', s.pos - 2)
-		if s.text[s.pos] == `\`` && (s.text[s.pos - 1] != slash || double_slash) {
+		if s.text[s.pos] == `\`` && (s.text[s.pos - 1] != slash || double_slash) { // ` // apostrophe balance comment. do not remove
 			if double_slash {
 				len++
 			}
@@ -742,7 +778,7 @@ fn (s mut Scanner) get_opening_bracket() int {
 		if s.text[pos] == `(` && !inside_string {
 			parentheses--
 		}
-		if s.text[pos] == `\'` && s.text[pos - 1] != `\\` && s.text[pos - 1] != `\`` {
+		if s.text[pos] == `\'` && s.text[pos - 1] != `\\` && s.text[pos - 1] != `\`` { // ` // apostrophe balance comment. do not remove
 			inside_string = !inside_string
 		}
 		if parentheses == 0 {
@@ -785,17 +821,17 @@ fn contains_capital(s string) bool {
 }
 
 // HTTPRequest  bad
-// HttpRequest  good 
+// HttpRequest  good
 fn good_type_name(s string) bool {
 	if s.len < 4 {
-		return true 
-	} 
-	for i in 2 .. s.len { 
+		return true
+	}
+	for i in 2 .. s.len {
 		if s[i].is_capital() && s[i-1].is_capital() && s[i-2].is_capital() {
-			return false 
-		} 
-	} 
-	return true 
-} 
+			return false
+		}
+	}
+	return true
+}
 
 

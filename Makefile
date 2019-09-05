@@ -1,61 +1,23 @@
 CC ?= cc
-CFLAGS ?= -O2 -fPIC
-PREFIX ?= /usr/local
-VC ?= 0.1.17
 
-all: v
-	$(info V has been successfully built)
+_SYS := $(shell uname 2>/dev/null || echo Unknown)
+_SYS := $(patsubst MSYS%,MSYS,$(_SYS))
+_SYS := $(patsubst MINGW%,MinGW,$(_SYS))
 
-v: v.c.out compiler/*.v vlib/**/*.v
-	./v.c.out -o v compiler
+ifneq ($(filter $(_SYS),MSYS MinGW),)
+WIN32:=1
+endif
 
-v-release: v
-	./v -cflags '${CFLAGS}' -o v compiler
-	strip v
+all:
+	rm -rf vc/
+	git clone --depth 1 --quiet https://github.com/vlang/vc
+ifdef WIN32
+	$(CC) -std=gnu11 -DUNICODE -D_UNICODE -w -o v0.exe vc/v_win.c
+	./v0.exe -o v.exe compiler
+else
+	$(CC) -std=gnu11 -w -o v vc/v.c -lm
+	./v -o v compiler
+endif
+	rm -rf vc/
+	@echo "V has been successfully built"
 
-v.c.out: v.${VC}.c
-	${CC} -std=gnu11 -w -o v.c.out v.${VC}.c -lm
-
-v.${VC}.c:
-	#curl -o v.${VC}.c -LsSf https://github.com/vlang/vc/raw/${VC}/v.c
-	curl -o v.${VC}.c -LsSf https://raw.githubusercontent.com/vlang/vc/master/v.c
-
-tools/vget: v
-	./v tools/vget.v
-
-test: v
-	./v -prod -o vprod compiler # Test prod build
-	echo "Running V tests..."
-	find . -name '*_test.v' -print0 | xargs -0 -n1 ./v
-	echo "Building V examples..."
-	find examples -name '*.v' -print0 | xargs -0 -n1 ./v
-	bash ./compiler/tests/repl/repl.sh
-
-clean:
-	-rm -f v.c v*.c v.c.out v vprod thirdparty/**/*.o tools/vget
-	find . -name '.*.c' -print0 | xargs -0 -n1 rm -f
-
-SOURCES = $(wildcard thirdparty/**/*.c)
-OBJECTS := ${SOURCES:.c=.o} 
-
-thirdparty: v ${OBJECTS}
-
-thirdparty-release: v ${OBJECTS}
-	strip ${OBJECTS}
-
-debug: clean v thirdparty
-
-release: CFLAGS += -pie
-release: clean v-release thirdparty-release
-
-install: uninstall all
-	mkdir -p ${PREFIX}/lib/vlang ${PREFIX}/bin
-	cp -r v tools vlib thirdparty ${PREFIX}/lib/vlang
-	ln -sf ${PREFIX}/lib/vlang/v ${PREFIX}/bin/v
-	ln -sf ${PREFIX}/lib/vlang/tools/vget ${PREFIX}/bin/vget
-
-uninstall:
-	rm -rf ${PREFIX}/{bin/v,bin/vget,lib/vlang}
-
-symlink: v tools/vget
-	ln -sf `pwd`/v ${PREFIX}/bin/v

@@ -5,25 +5,26 @@
 module main
 
 import os
-import strings 
+import strings
+import time
 
 struct CGen {
 	out          os.File
 	out_path     string
+	//types        []string
+	thread_fns   []string
+	//buf          strings.Builder
+	is_user      bool
+mut:
+	lines        []string
 	typedefs     []string
 	type_aliases []string
 	includes     []string
-	types        []string
 	thread_args  []string
-	thread_fns   []string
 	consts       []string
 	fns          []string
 	so_fns       []string
 	consts_init  []string
-	//buf          strings.Builder 
-	is_user      bool
-mut:
-	lines        []string
 	pass         Pass
 	nogen           bool
 	tmp_line        string
@@ -35,18 +36,19 @@ mut:
 	file            string
 	line            int
 	line_directives bool
+	cut_pos int
 }
 
-fn new_cgen(out_name_c string) *CGen {
-	path:='.$out_name_c'
+fn new_cgen(out_name_c string) &CGen {
+	path := out_name_c
 	out := os.create(path) or {
-		println('failed to create $path') 
-		return &CGen{} 
-	} 
+		println('failed to create $path')
+		return &CGen{}
+	}
 	gen := &CGen {
-		out_path: path 
-		out: out 
-		//buf: strings.new_builder(10000) 
+		out_path: path
+		out: out
+		//buf: strings.new_builder(10000)
 		lines: _make(0, 1000, sizeof(string))
 	}
 	return gen
@@ -126,6 +128,23 @@ fn (g mut CGen) add_placeholder() int {
 	return g.cur_line.len
 }
 
+fn (g mut CGen) start_cut() {
+	g.cut_pos = g.add_placeholder()
+}
+
+fn (g mut CGen) cut() string {
+	pos := g.cut_pos
+	g.cut_pos = 0
+	if g.is_tmp {
+		res := g.tmp_line.right(pos)
+		g.tmp_line = g.tmp_line.left(pos)
+		return res
+	}
+	res := g.cur_line.right(pos)
+	g.cur_line = g.cur_line.left(pos)
+	return res
+}
+
 fn (g mut CGen) set_placeholder(pos int, val string) {
 	if g.nogen || g.pass != .main {
 		return
@@ -144,8 +163,8 @@ fn (g mut CGen) set_placeholder(pos int, val string) {
 }
 
 fn (g mut CGen) insert_before(val string) {
-	prev := g.lines[g.lines.len - 1] 
-	g.lines[g.lines.len - 1] = '$prev \n $val \n' 
+	prev := g.lines[g.lines.len - 1]
+	g.lines[g.lines.len - 1] = '$prev \n $val \n'
 }
 
 fn (g mut CGen) register_thread_fn(wrapper_name, wrapper_text, struct_text string) {
@@ -165,6 +184,7 @@ fn (c mut V) prof_counters() string {
 		//res << 'double ${c.table.cgen_name(f)}_time;'
 	//}
 	// Methods
+	/*
 	for typ in c.table.types {
 		// println('')
 		for f in typ.methods {
@@ -173,6 +193,7 @@ fn (c mut V) prof_counters() string {
 			// println(f.cgen_name())
 		}
 	}
+	*/
 	return res.join(';\n')
 }
 
@@ -184,6 +205,7 @@ fn (p mut Parser) print_prof_counters() string {
 		//res << 'if ($counter) printf("%%f : $f.name \\n", $counter);'
 	//}
 	// Methods
+	/*
 	for typ in p.table.types {
 		// println('')
 		for f in typ.methods {
@@ -195,14 +217,8 @@ fn (p mut Parser) print_prof_counters() string {
 			// println(f.cgen_name())
 		}
 	}
+	*/
 	return res.join(';\n')
-}
-
-fn (p mut Parser) gen_type(s string) {
-	if !p.first_pass() {
-		return
-	}
-	p.cgen.types << s
 }
 
 fn (p mut Parser) gen_typedef(s string) {
@@ -224,25 +240,147 @@ fn (g mut CGen) add_to_main(s string) {
 }
 
 
-fn build_thirdparty_obj_file(flag string) { 
-	obj_path := flag.all_after(' ') 
+fn build_thirdparty_obj_file(flag string) {
+	obj_path := flag.all_after(' ')
 	if os.file_exists(obj_path) {
-		return 
-	} 
-	println('$obj_path not found, building it...') 
-	parent := obj_path.all_before_last('/').trim_space() 
-	files := os.ls(parent) 
-	//files := os.ls(parent).filter(_.ends_with('.c'))  TODO 
-	mut cfiles := '' 
-	for file in files {
-		if file.ends_with('.c') { 
-			cfiles += parent + '/' + file + ' ' 
-		} 
-	} 
-	cc := if os.user_os() == 'windows' { 'gcc' } else { 'cc' } // TODO clang support on Windows  
-	res := os.exec('$cc -fPIC -c -o $obj_path $cfiles') or {
-		panic(err)
+		return
 	}
-	println(res) 
-} 
+	println('$obj_path not found, building it...')
+	parent := os.dir( obj_path )
+	files := os.ls(parent)
+	mut cfiles := ''
+	for file in files {
+		if file.ends_with('.c') {
+			cfiles += '"' + os.realpath( parent + os.PathSeparator + file ) + '" '
+		}
+	}
+	cc := find_c_compiler()
+	cc_thirdparty_options := find_c_compiler_thirdparty_options()
+	cmd := '$cc $cc_thirdparty_options -c -o "$obj_path" $cfiles'
+	res := os.exec(cmd) or {
+		println('failed thirdparty object build cmd: $cmd')
+		cerror(err)
+		return
+	}
+	println(res.output)
+}
+
+fn os_name_to_ifdef(name string) string {
+	switch name {
+		case 'windows': return '_WIN32'
+		case 'mac': return '__APPLE__'
+		case 'linux': return '__linux__'
+		case 'freebsd': return '__FreeBSD__'
+		case 'openbsd': return '__OpenBSD__'
+		case 'netbsd': return '__NetBSD__'
+		case 'dragonfly': return '__DragonFly__'
+		case 'msvc': return '_MSC_VER'
+	}
+	cerror('bad os ifdef name "$name"')
+	return ''
+}
+
+fn platform_postfix_to_ifdefguard(name string) string {
+  switch name {
+    case '.v': return '' // no guard needed
+    case '_win.v': return '#ifdef _WIN32'
+    case '_nix.v': return '#ifndef _WIN32'
+    case '_lin.v': return '#ifdef __linux__'
+    case '_mac.v': return '#ifdef __APPLE__'
+  }
+  cerror('bad platform_postfix "$name"')
+  return ''
+}
+
+// C struct definitions, ordered
+// Sort the types, make sure types that are referenced by other types
+// are added before them.
+fn (v mut V) c_type_definitions() string {
+	mut types := []Type // structs that need to be sorted
+	mut builtin_types := []Type // builtin types
+	// builtin types need to be on top
+	builtins := ['string', 'array', 'map', 'Option']
+	for builtin in builtins {
+		typ := v.table.typesmap[builtin]
+		builtin_types << typ
+	}
+	// everything except builtin will get sorted
+	for t_name, t in v.table.typesmap {
+		if t_name in builtins {
+			continue
+		}
+		types << t
+	}
+	// sort structs
+	types_sorted := sort_structs(types)
+	// Generate C code
+	return types_to_c(builtin_types,v.table) + '\n//----\n' +
+			types_to_c(types_sorted, v.table)
+}
+	
+fn types_to_c(types []Type, table &Table) string {
+	mut sb := strings.new_builder(10)
+	for t in types {
+		if t.cat != .union_ && t.cat != .struct_ {
+			continue
+		}
+		//if is_objc {
+			//sb.writeln('@interface $name : $objc_parent { @public')
+		//}
+		//if is_atomic {
+			//sb.write('_Atomic ')
+		//}
+		kind := if t.cat == .union_ {'union'} else {'struct'}
+		sb.writeln('$kind $t.name {')
+		for field in t.fields {
+			sb.writeln(table.cgen_name_type_pair(field.name,
+				field.typ) + ';')
+		}
+		sb.writeln('};\n')
+		//if is_objc {
+			//sb.writeln('@end')
+		//}
+	}
+	return sb.str()
+}
+
+// sort structs by dependant fields
+fn sort_structs(types []Type) []Type {
+	mut dep_graph := new_dep_graph()
+	// types name list
+	mut type_names := []string
+	for t in types {
+		type_names << t.name
+	}
+	// loop over types
+	for t in types {
+		// create list of deps
+		mut field_deps := []string
+		for field in t.fields {
+			// skip if not in types list or already in deps
+			if !(field.typ in type_names) || field.typ in field_deps {
+				continue
+			}
+			field_deps << field.typ
+		}
+		// add type and dependant types to graph
+		dep_graph.add(t.name, field_deps)
+	}
+	// sort graph
+	dep_graph_sorted := dep_graph.resolve()
+	if !dep_graph_sorted.acyclic {
+		cerror('error: cgen.sort_structs() DGNAC.\nplease create a new issue here: https://github.com/vlang/v/issues and tag @joe-conigliaro')
+	}
+	// sort types
+	mut types_sorted := []Type
+	for node in dep_graph_sorted.nodes {
+		for t in types {
+			if t.name == node.name {
+				types_sorted << t
+				continue
+			}
+		}
+	}
+	return types_sorted
+}
 

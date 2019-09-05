@@ -4,12 +4,14 @@
 
 module main
 
-import os
-import time
-import strings
+import (
+	os
+	time
+	strings
+)
 
 const (
-	Version = '0.1.17'  
+	Version = '0.1.18'
 )
 
 enum BuildMode {
@@ -24,24 +26,20 @@ enum BuildMode {
 	build //TODO a better name would be smth like `.build_module` I think
 }
 
-fn modules_path() string {
-	return os.home_dir() + '/.vmodules/'
-}
-
 const (
-	SupportedPlatforms = ['windows', 'mac', 'linux', 'freebsd', 'openbsd', 'netbsd', 'dragonfly', 'msvc'] 
-	ModPath            = modules_path()
+	SupportedPlatforms = ['windows', 'mac', 'linux', 'freebsd', 'openbsd', 'netbsd', 'dragonfly', 'msvc']
+	ModPath            = os.home_dir() + '/.vmodules/'
 )
 
 enum OS {
 	mac
 	linux
 	windows
-	freebsd 
-	openbsd 
-	netbsd 
-	dragonfly 
-	msvc 
+	freebsd
+	openbsd
+	netbsd
+	dragonfly
+	msvc
 }
 
 enum Pass {
@@ -64,13 +62,14 @@ mut:
 	out_name_c string // name of the temporary C file
 	files      []string // all V files that need to be parsed and compiled
 	dir        string // directory (or file) being compiled (TODO rename to path?)
-	table      *Table // table with types, vars, functions etc
-	cgen       *CGen // C code generator
-	pref       *Preferences // all the prefrences and settings extracted to a struct for reusability
+	table      &Table // table with types, vars, functions etc
+	cgen       &CGen // C code generator
+	pref       &Preferences // all the prefrences and settings extracted to a struct for reusability
 	lang_dir   string // "~/code/v"
 	out_name   string // "program.exe"
 	vroot      string
-	mod        string  // module being built with -lib 
+	mod        string  // module being built with -lib
+	//parsers    []Parser
 }
 
 struct Preferences {
@@ -86,18 +85,18 @@ mut:
 	is_prod        bool // use "-O2"
 	is_verbose     bool // print extra information with `v.log()`
 	obfuscate      bool // `v -obf program.v`, renames functions to "f_XXX"
-	is_play        bool // playground mode
 	is_repl        bool
 	is_run         bool
 	show_c_cmd     bool // `v -show_c_cmd` prints the C command to build program.v.c
 	sanitize       bool // use Clang's new "-fsanitize" option
 	is_debuggable  bool
 	is_debug       bool // keep compiled C files
-	no_auto_free   bool // `v -nofree` disable automatic `free()` insertion for better performance in some applications  (e.g. compilers) 
+	no_auto_free   bool // `v -nofree` disable automatic `free()` insertion for better performance in some applications  (e.g. compilers)
 	cflags        string // Additional options which will be passed to the C compiler.
-	                     // For example, passing -cflags -Os will cause the C compiler to optimize the generated binaries for size.
-	                     // You could pass several -cflags XXX arguments. They will be merged with each other.
-	                     // You can also quote several options at the same time: -cflags '-Os -fno-inline-small-functions'.
+						 // For example, passing -cflags -Os will cause the C compiler to optimize the generated binaries for size.
+						 // You could pass several -cflags XXX arguments. They will be merged with each other.
+						 // You can also quote several options at the same time: -cflags '-Os -fno-inline-small-functions'.
+	ccompiler  string // the name of the used C compiler
 }
 
 
@@ -114,51 +113,67 @@ fn main() {
 		return
 	}
 	if 'translate' in args {
-		println('Translating C to V will be available in V 0.3') 
-		return 
-	} 
+		println('Translating C to V will be available in V 0.3')
+		return
+	}
 	if 'up' in args {
-		update_v() 
-		return 
-	} 
+		update_v()
+		return
+	}
 	if 'get' in args {
-		println('use `v install` to install modules from vpm.vlang.io') 
-		return 
-	} 
+		println('use `v install` to install modules from vpm.vlang.io')
+		return
+	}
+	if 'symlink' in args {
+		create_symlink()
+		return
+	}
+	if args.join(' ').contains(' test v') {
+		test_v()
+		return
+	}
 	if 'install' in args {
 		if args.len < 3 {
 			println('usage: v install [module] [module] [...]')
-			return 
+			return
 		}
-
 		names := args.slice(2, args.len)
 		vexec := os.executable()
 		vroot := os.dir(vexec)
 		vget := '$vroot/tools/vget'
 		if true {
-			//println('Building vget...') 
+			//println('Building vget...')
 			os.chdir(vroot + '/tools')
-			_ := os.exec('$vexec -o $vget vget.v') or {
-				panic(err)
+			vgetcompilation := os.exec('$vexec -o $vget vget.v') or {
+				cerror(err)
+				return
+			}
+			if vgetcompilation.exit_code != 0 {
+				cerror( vgetcompilation.output )
+				return
 			}
 		}
-
-		_ := os.exec('$vget ' + names.join(' ')) or {
-				panic(err)
+		vgetresult := os.exec('$vget ' + names.join(' ')) or {
+			cerror(err)
+			return
+		}
+		if vgetresult.exit_code != 0 {
+			cerror( vgetresult.output )
+			return
 		}
 		return
-	} 
-	// TODO quit if the compiler is too old 
+	}
+	// TODO quit if the compiler is too old
 	// u := os.file_last_mod_unix('v')
 	// If there's no tmp path with current version yet, the user must be using a pre-built package
 	// Copy the `vlib` directory to the tmp path.
-/* 
-	// TODO 
+/*
+	// TODO
 	if !os.file_exists(TmpPath) && os.file_exists('vlib') {
 	}
-*/ 
+*/
 	// Just fmt and exit
-	if 'fmt' in args { 
+	if 'fmt' in args {
 		file := args.last()
 		if !os.file_exists(file) {
 			println('"$file" does not exist')
@@ -171,17 +186,12 @@ fn main() {
 		println('vfmt is temporarily disabled')
 		return
 	}
-	// v get sqlite 
-	if 'get' in args { 
-		// Create the modules directory if it's not there. 
-		if !os.file_exists(ModPath)  { 
+	// v get sqlite
+	if 'get' in args {
+		// Create the modules directory if it's not there.
+		if !os.file_exists(ModPath)  {
 			os.mkdir(ModPath)
-		} 
-	} 
-	// No args? REPL
-	if args.len < 2 || (args.len == 2 && args[1] == '-') {
-		run_repl()
-		return
+		}
 	}
 	// Construct the V object from command line arguments
 	mut v := new_v(args)
@@ -189,34 +199,44 @@ fn main() {
 		println(args)
 	}
 	// Generate the docs and exit
-	if 'doc' in args { 
+	if 'doc' in args {
 		// v.gen_doc_html_for_module(args.last())
 		exit(0)
 	}
-  
+
 	if 'run' in args {
 		// always recompile for now, too error prone to skip recompilation otherwise
 		// for example for -repl usage, especially when piping lines to v
-		v.compile() 
+		v.compile()
 		v.run_compiled_executable_and_exit()
 	}
-  
+
+	// No args? REPL
+	if args.len < 2 || (args.len == 2 && args[1] == '-') || 'runrepl' in args {
+		run_repl()
+		return
+	}
+
 	v.compile()
-  
+
 	if v.pref.is_test {
 		v.run_compiled_executable_and_exit()
 	}
-  
+
 }
 
 fn (v mut V) compile() {
 	// Emily: Stop people on linux from being able to build with msvc
 	if os.user_os() != 'windows' && v.os == .msvc {
-		panic('Cannot build with msvc on ${os.user_os()}')
+		cerror('Cannot build with msvc on ${os.user_os()}')
 	}
 
 	mut cgen := v.cgen
 	cgen.genln('// Generated by V')
+	// Add builtin parsers
+	for i, file in v.files {
+	//        v.parsers << v.new_parser(file)
+	}
 	v.add_v_files_to_compile()
 	if v.pref.is_verbose {
 		println('all .v files:')
@@ -224,142 +244,24 @@ fn (v mut V) compile() {
 	}
 	// First pass (declarations)
 	for file in v.files {
-		mut p := v.new_parser(file, Pass.decl) 
-		p.parse()
+		mut p := v.new_parser(file)
+		p.parse(.decl)
 	}
 	// Main pass
 	cgen.pass = Pass.main
-	if v.pref.is_play {
-		cgen.genln('#define VPLAY (1) ')
-	}
-	cgen.genln('   
-#include <stdio.h>  // TODO remove all these includes, define all function signatures and types manually 
-#include <stdlib.h>
-#include <signal.h>
-#include <stdarg.h> // for va_list 
-#include <inttypes.h>  // int64_t etc 
-#include <string.h> // memcpy 
-
-#define STRUCT_DEFAULT_VALUE {}
-#define EMPTY_STRUCT_DECLARATION
-#define EMPTY_STRUCT_INIT
-#define OPTION_CAST(x) (x)
-
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
-// must be included after <windows.h> 
-#include <shellapi.h>
-
-#include <io.h> // _waccess
-#include <fcntl.h> // _O_U8TEXT
-#include <direct.h> // _wgetcwd
-//#include <WinSock2.h>
-#ifdef _MSC_VER
-// On MSVC these are the same (as long as /volatile:ms is passed)
-#define _Atomic volatile
-
-// MSVC can\'t parse some things properly
-#undef STRUCT_DEFAULT_VALUE
-#define STRUCT_DEFAULT_VALUE {0}
-#undef EMPTY_STRUCT_DECLARATION
-#define EMPTY_STRUCT_DECLARATION void *____dummy_variable;
-#undef EMPTY_STRUCT_INIT
-#define EMPTY_STRUCT_INIT 0
-#undef OPTION_CAST
-#define OPTION_CAST(x)
-#endif
-
-void pthread_mutex_lock(HANDLE *m) {
-	WaitForSingleObject(*m, INFINITE);
-}
-
-void pthread_mutex_unlock(HANDLE *m) {
-	ReleaseMutex(*m);
-}
-#else
-#include <pthread.h> 
-#endif 
-
-//================================== TYPEDEFS ================================*/ 
-
-typedef unsigned char byte;
-typedef unsigned int uint;
-typedef int64_t i64;
-typedef int32_t i32;
-typedef int16_t i16;
-typedef int8_t i8;
-typedef uint64_t u64;
-typedef uint32_t u32;
-typedef uint16_t u16;
-typedef uint8_t u8;
-typedef uint32_t rune;
-typedef float f32;
-typedef double f64; 
-typedef unsigned char* byteptr;
-typedef int* intptr;
-typedef void* voidptr;
-typedef struct array array;
-typedef struct map map;
-typedef array array_string; 
-typedef array array_int; 
-typedef array array_byte; 
-typedef array array_uint; 
-typedef array array_float; 
-typedef array array_f32; 
-typedef array array_f64; 
-typedef map map_int; 
-typedef map map_string; 
-#ifndef bool
-	typedef int bool;
-	#define true 1
-	#define false 0
-#endif
-
-//============================== HELPER C MACROS =============================*/ 
-
-#define _PUSH(arr, val, tmp, tmp_typ) {tmp_typ tmp = (val); array__push(arr, &tmp);}
-#define _PUSH_MANY(arr, val, tmp, tmp_typ) {tmp_typ tmp = (val); array__push_many(arr, tmp.data, tmp.len);}
-#define _IN(typ, val, arr) array_##typ##_contains(arr, val) 
-#define _IN_MAP(val, m) map__exists(m, val) 
-#define ALLOC_INIT(type, ...) (type *)memdup((type[]){ __VA_ARGS__ }, sizeof(type)) 
-
-//================================== GLOBALS =================================*/   
-//int V_ZERO = 0; 
-byteptr g_str_buf; 
-int load_so(byteptr);
-void reload_so();
-void init_consts();')
-	
-	if v.os != .windows && v.os != .msvc {
-		if v.pref.is_so {
-			cgen.genln('pthread_mutex_t live_fn_mutex;')
-		}  
-		if v.pref.is_live {
-			cgen.genln('pthread_mutex_t live_fn_mutex = PTHREAD_MUTEX_INITIALIZER;')
-		}
-	} else {
-		if v.pref.is_so {
-			cgen.genln('HANDLE live_fn_mutex;')
-		}  
-		if v.pref.is_live {
-			cgen.genln('HANDLE live_fn_mutex = 0;')
-		}
+	if v.pref.is_debug {
+		cgen.genln('#define VDEBUG (1) ')
 	}
 
+	cgen.genln(CommonCHeaders)
 	
+	v.generate_hotcode_reloading_declarations()
+
 	imports_json := v.table.imports.contains('json')
 	// TODO remove global UI hack
 	if v.os == .mac && ((v.pref.build_mode == .embed_vlib && v.table.imports.contains('ui')) ||
 	(v.pref.build_mode == .build && v.dir.contains('/ui'))) {
 		cgen.genln('id defaultFont = 0; // main.v')
-	}
-	// TODO remove ugly .c include once V has its own json parser
-	// Embed cjson either in embedvlib or in json.o
-	if (imports_json && v.pref.build_mode == .embed_vlib) ||
-	(v.pref.build_mode == .build && v.out_name.contains('json.o')) {
-		//cgen.genln('#include "cJSON.c" ')
 	}
 	// We need the cjson header for all the json decoding user will do in default mode
 	if v.pref.build_mode == .default_mode {
@@ -374,7 +276,7 @@ void init_consts();')
 		//cgen.genln('i64 total_m = 0; // For counting total RAM allocated')
 		cgen.genln('int g_test_ok = 1; ')
 		if v.table.imports.contains('json') {
-			cgen.genln(' 
+			cgen.genln('
 #define js_get(object, key) cJSON_GetObjectItemCaseSensitive((object), (key))
 ')
 		}
@@ -386,8 +288,8 @@ void init_consts();')
 	cgen.genln('this line will be replaced with definitions')
 	defs_pos := cgen.lines.len - 1
 	for file in v.files {
-		mut p := v.new_parser(file, Pass.main)
-		p.parse()
+		mut p := v.new_parser(file)
+		p.parse(.main)
 		// p.g.gen_x64()
 		// Format all files (don't format automatically generated vlib headers)
 		if !v.pref.nofmt && !file.contains('/vlib/') {
@@ -399,7 +301,7 @@ void init_consts();')
 	mut d := strings.new_builder(10000)// Avoid unnecessary allocations
 	d.writeln(cgen.includes.join_lines())
 	d.writeln(cgen.typedefs.join_lines())
-	d.writeln(cgen.types.join_lines())
+	d.writeln(v.c_type_definitions())
 	d.writeln('\nstring _STR(const char*, ...);\n')
 	d.writeln('\nstring _STR_TMP(const char*, ...);\n')
 	d.writeln(cgen.fns.join_lines())
@@ -410,57 +312,79 @@ void init_consts();')
 		d.writeln(v.prof_counters())
 	}
 	dd := d.str()
-	cgen.lines.set(defs_pos, dd)// TODO `def.str()` doesn't compile
+	cgen.lines[defs_pos] = dd// TODO `def.str()` doesn't compile
+
+  v.generate_main()
+
+  v.generate_hotcode_reloading_code()
+
+  cgen.save()
+	if v.pref.is_verbose {
+		v.log('flags=')
+		println(v.table.flags)
+	}
+	v.cc()
+}
+
+fn (v mut V) generate_main() {
+	mut cgen := v.cgen
+
 	// if v.build_mode in [.default, .embed_vlib] {
 	if v.pref.build_mode == .default_mode || v.pref.build_mode == .embed_vlib {
-		mut consts_init_body := cgen.consts_init.join_lines() 
+		mut consts_init_body := cgen.consts_init.join_lines()
 		for imp in v.table.imports {
 			if imp == 'http' {
-				consts_init_body += '\n http__init_module();'  
-			} 
-		} 
+				consts_init_body += '\n http__init_module();'
+			}
+		}
 		// vlib can't have `init_consts()`
-		cgen.genln('void init_consts() { 
-#ifdef _WIN32\n _setmode(_fileno(stdout), _O_U8TEXT);
-SetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), ENABLE_PROCESSED_OUTPUT | 0x0004); 
-// ENABLE_VIRTUAL_TERMINAL_PROCESSING\n#endif\n g_str_buf=malloc(1000);
-$consts_init_body 
+		cgen.genln('void init_consts() {
+#ifdef _WIN32
+#ifndef _BOOTSTRAP_NO_UNICODE_STREAM
+_setmode(_fileno(stdout), _O_U8TEXT);
+SetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), ENABLE_PROCESSED_OUTPUT | 0x0004);
+// ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#endif
+#endif
+g_str_buf=malloc(1000);
+$consts_init_body
 }')
 		// _STR function can't be defined in vlib
 		cgen.genln('
 string _STR(const char *fmt, ...) {
 	va_list argptr;
 	va_start(argptr, fmt);
-	size_t len = vsnprintf(0, 0, fmt, argptr) + 1;  
+	size_t len = vsnprintf(0, 0, fmt, argptr) + 1;
 	va_end(argptr);
-	byte* buf = malloc(len);  
+	byte* buf = malloc(len);
 	va_start(argptr, fmt);
-	vsprintf(buf, fmt, argptr);
+	vsprintf((char *)buf, fmt, argptr);
 	va_end(argptr);
-#ifdef DEBUG_ALLOC 
-	puts("_STR:"); 
-	puts(buf); 
-#endif 
+#ifdef DEBUG_ALLOC
+	puts("_STR:");
+	puts(buf);
+#endif
 	return tos2(buf);
 }
 
 string _STR_TMP(const char *fmt, ...) {
 	va_list argptr;
 	va_start(argptr, fmt);
-	size_t len = vsnprintf(0, 0, fmt, argptr) + 1;  
+	//size_t len = vsnprintf(0, 0, fmt, argptr) + 1;
 	va_end(argptr);
 	va_start(argptr, fmt);
-	vsprintf(g_str_buf, fmt, argptr);
+	vsprintf((char *)g_str_buf, fmt, argptr);
 	va_end(argptr);
-#ifdef DEBUG_ALLOC 
-	//puts("_STR_TMP:"); 
-	//puts(g_str_buf); 
-#endif 
+#ifdef DEBUG_ALLOC
+	//puts("_STR_TMP:");
+	//puts(g_str_buf);
+#endif
 	return tos2(g_str_buf);
 }
 
 ')
 	}
+
 	// Make sure the main function exists
 	// Obviously we don't need it in libraries
 	if v.pref.build_mode != .build {
@@ -474,13 +398,13 @@ string _STR_TMP(const char *fmt, ...) {
 			}
 			else {
 				println('panic: function `main` is undeclared in the main module')
-				exit(1) 
+				exit(1)
 			}
 		}
 		// Generate `main` which calls every single test function
 		else if v.pref.is_test {
 			cgen.genln('int main() { init_consts();')
-			for key, f in v.table.fns { 
+			for _, f in v.table.fns {
 				if f.name.starts_with('test_') {
 					cgen.genln('$f.name();')
 				}
@@ -488,153 +412,6 @@ string _STR_TMP(const char *fmt, ...) {
 			cgen.genln('return g_test_ok == 0; }')
 		}
 	}
-	// Hot code reloading 
-	if v.pref.is_live {
-		file := v.dir 
-		file_base := v.dir.replace('.v', '') 
-		so_name := file_base + '.so' 
-		// Need to build .so file before building the live application 
-		// The live app needs to load this .so file on initialization. 
-		mut vexe := os.args[0]
-
-		if os.user_os() == 'windows' {
-			vexe = vexe.replace('\\', '\\\\')
-		}
-
-		mut msvc := ''
-		if v.os == .msvc {
-			msvc = '-os msvc'
-		}
-
-		mut debug := ''
-
-		if v.pref.is_debug {
-			debug = '-debug'
-		}
-
-		os.system('$vexe $msvc $debug -o $file_base -shared $file') 
-		cgen.genln('
-
-void lfnmutex_print(char *s){
-	if(0){
-		fflush(stderr);
-		fprintf(stderr,">> live_fn_mutex: %p | %s\\n", &live_fn_mutex, s);
-		fflush(stderr);
-	}
-}
-')
-
-		if v.os != .windows && v.os != .msvc {
-			cgen.genln('
-#include <dlfcn.h>
-void* live_lib=0;
-int load_so(byteptr path) {
-	char cpath[1024];
-	sprintf(cpath,"./%s", path);
-	//printf("load_so %s\\n", cpath); 
-	if (live_lib) dlclose(live_lib);
-	live_lib = dlopen(cpath, RTLD_LAZY);
-	if (!live_lib) {
-		puts("open failed"); 
-		exit(1); 
-		return 0;
-	}
-')
-			for so_fn in cgen.so_fns {
-				cgen.genln('$so_fn = dlsym(live_lib, "$so_fn");  ')
-			}
-		}
-		else {
-			cgen.genln('
-void* live_lib=0;
-int load_so(byteptr path) {
-	char cpath[1024];
-	sprintf(cpath, "./%s", path);
-	if (live_lib) FreeLibrary(live_lib);
-	live_lib = LoadLibraryA(cpath);
-	if (!live_lib) {
-		puts("open failed");
-		exit(1);
-		return 0;
-	}
-')
-
-			for so_fn in cgen.so_fns {
-				cgen.genln('$so_fn = (void *)GetProcAddress(live_lib, "$so_fn");  ')
-			}
-		}
-		
-		cgen.genln('return 1; 
-}
-
-int _live_reloads = 0;
-void reload_so() {
-	char new_so_base[1024];
-	char new_so_name[1024];
-	char compile_cmd[1024];
-	int last = os__file_last_mod_unix(tos2("$file"));
-	while (1) {
-		// TODO use inotify
-		int now = os__file_last_mod_unix(tos2("$file"));
-		if (now != last) {
-			last = now;
-			_live_reloads++;
-
-			//v -o bounce -shared bounce.v
-			sprintf(new_so_base, ".tmp.%d.${file_base}", _live_reloads);
-			#ifdef _WIN32
-			// We have to make this directory becuase windows WILL NOT
-			// do it for us
-			os__mkdir(string_all_before_last(tos2(new_so_base), tos2("/")));
-			#endif
-			#ifdef _MSC_VER
-			sprintf(new_so_name, "%s.dll", new_so_base);
-			#else
-			sprintf(new_so_name, "%s.so", new_so_base);
-			#endif
-			sprintf(compile_cmd, "$vexe $msvc -o %s -shared $file", new_so_base);
-			os__system(tos2(compile_cmd));
-
-			if( !os__file_exists(tos2(new_so_name)) ) {
-				fprintf(stderr, "Errors while compiling $file\\n");
-				continue;        
-			}
-      
-			lfnmutex_print("reload_so locking...");
-			pthread_mutex_lock(&live_fn_mutex);
-			lfnmutex_print("reload_so locked");
-        
-			live_lib = 0; // hack: force skipping dlclose/1, the code may be still used...
-			load_so(new_so_name);
-			#ifndef _WIN32
-			unlink(new_so_name); // removing the .so file from the filesystem after dlopen-ing it is safe, since it will still be mapped in memory.
-			#else
-			_unlink(new_so_name);
-			#endif
-			//if(0 == rename(new_so_name, "${so_name}")){
-			//	load_so("${so_name}"); 
-			//}
-
-			lfnmutex_print("reload_so unlocking...");  
-			pthread_mutex_unlock(&live_fn_mutex);  
-			lfnmutex_print("reload_so unlocked");
-
-		}
-		time__sleep_ms(100); 
-	}
-}
-' ) 
-	}
-
-	if v.pref.is_so {
-		cgen.genln(' int load_so(byteptr path) { return 0; }')
-	} 
-	cgen.save()
-	if v.pref.is_verbose {
-		v.log('flags=')
-		println(v.table.flags)
-	}  
-	v.cc()
 }
 
 fn final_target_out_name(out_name string) string {
@@ -654,8 +431,8 @@ fn final_target_out_name(out_name string) string {
 
 fn (v V) run_compiled_executable_and_exit() {
 	if v.pref.is_verbose {
-		println('============ running $v.out_name ============') 
-	}	  
+		println('============ running $v.out_name ============')
+	}	
 	mut cmd := final_target_out_name(v.out_name).replace('.exe','')
 	if os.args.len > 3 {
 		cmd += ' ' + os.args.right(3).join(' ')
@@ -665,273 +442,24 @@ fn (v V) run_compiled_executable_and_exit() {
 		if ret != 0 {
 			exit(1)
 		}
-	}    
+	}
 	if v.pref.is_run {
 		ret := os.system(cmd)
-		// TODO: make the runner wrapping as transparent as possible 
-		// (i.e. use execve when implemented). For now though, the runner 
-		// just returns the same exit code as the child process 
+		// TODO: make the runner wrapping as transparent as possible
+		// (i.e. use execve when implemented). For now though, the runner
+		// just returns the same exit code as the child process
 		// (see man system, man 2 waitpid: C macro WEXITSTATUS section)
-		exit( ret >> 8 ) 
+		exit( ret >> 8 )
 	}
 	exit(0)
-}
-
-fn (c mut V) cc_windows_cross() {
-       if !c.out_name.ends_with('.exe') {
-               c.out_name = c.out_name + '.exe'
-       }
-       mut args := '-o $c.out_name -w -L. '
-       // -I flags
-       for flag in c.table.flags {
-               if !flag.starts_with('-l') {
-                       args += flag
-                       args += ' '
-               }
-       }
-       mut libs := ''
-       if c.pref.build_mode == .default_mode {
-               libs = '"$ModPath/vlib/builtin.o"'
-               if !os.file_exists(libs) {
-                       println('`builtin.o` not found')
-                       exit(1) 
-               }
-               for imp in c.table.imports {
-                       libs += ' "$ModPath/vlib/${imp}.o"'
-               }
-       }
-       args += ' $c.out_name_c '
-       // -l flags (libs)
-       for flag in c.table.flags {
-               if flag.starts_with('-l') {
-                       args += flag
-                       args += ' '
-               }
-       }
-               println('Cross compiling for Windows...')
-               winroot := '$ModPath/winroot' 
-	if !os.dir_exists(winroot) {
-		winroot_url := 'https://github.com/vlang/v/releases/download/v0.1.10/winroot.zip' 
-		println('"$winroot" not found. Download it from $winroot_url and save in $ModPath') 
-		exit(1) 
- 
-} 
-               mut obj_name := c.out_name
-               obj_name = obj_name.replace('.exe', '')
-               obj_name = obj_name.replace('.o.o', '.o')
-               include := '-I $winroot/include '
-               cmd := 'clang -o $obj_name -w $include -DUNICODE -D_UNICODE -m32 -c -target x86_64-win32 $ModPath/$c.out_name_c'
-               if c.pref.show_c_cmd {
-                       println(cmd)
-               }
-               if os.system(cmd) != 0 {
-			println('Cross compilation for Windows failed. Make sure you have clang installed.') 
-                       exit(1) 
-               }
-               if c.pref.build_mode != .build {
-                       link_cmd := 'lld-link $obj_name $winroot/lib/libcmt.lib ' +
-                       '$winroot/lib/libucrt.lib $winroot/lib/kernel32.lib $winroot/lib/libvcruntime.lib ' +
-                       '$winroot/lib/uuid.lib'
-               if c.pref.show_c_cmd {
-		println(link_cmd) 
-		} 
-
-                if  os.system(link_cmd)  != 0 { 
-			println('Cross compilation for Windows failed. Make sure you have lld linker installed.')  
-                       exit(1) 
-} 
-                       // os.rm(obj_name)
-               }
-               println('Done!')
-}
-
-fn (v mut V) cc() {
-	// Cross compiling for Windows 
-	if v.os == .windows {
-		$if !windows { 
-			v.cc_windows_cross()  
-			return 
-		} 
-	} 
-	$if windows { 
-		if v.os == .msvc {
-			v.cc_msvc() 
-			return
-		}
-	}
-	
-	linux_host := os.user_os() == 'linux'
-	v.log('cc() isprod=$v.pref.is_prod outname=$v.out_name')
-	mut a := [v.pref.cflags, '-std=gnu11', '-w'] // arguments for the C compiler
-	flags := v.table.flags.join(' ')
-	//mut shared := ''
-	if v.pref.is_so {
-		a << '-shared -fPIC '// -Wl,-z,defs'
-		v.out_name = v.out_name + '.so'
-	}
-	if v.pref.is_prod {
-		a << '-O2'
-	}
-	else {
-		a << '-g'
-	}
-	if v.pref.is_live || v.pref.is_so {
-		// See 'man dlopen', and test running a GUI program compiled with -live
-		if (v.os == .linux || os.user_os() == 'linux'){    
-			a << '-rdynamic'
-		}
-		if (v.os == .mac || os.user_os() == 'mac'){
-			a << '-flat_namespace'
-		}
-	}
-	mut libs := ''// builtin.o os.o http.o etc
-	if v.pref.build_mode == .build {
-		a << '-c'
-	}
-	else if v.pref.build_mode == .embed_vlib {
-		// 
-	}
-	else if v.pref.build_mode == .default_mode {
-		libs = '"$ModPath/vlib/builtin.o"'
-		if !os.file_exists(libs) {
-			println('`builtin.o` not found')
-			exit(1)
-		}
-		for imp in v.table.imports {
-			if imp == 'webview' {
-				continue
-			}
-			libs += ' "$ModPath/vlib/${imp}.o"'
-		}
-	}
-	// -I flags
-	/* 
-mut args := '' 
-	for flag in v.table.flags {
-		if !flag.starts_with('-l') {
-			args += flag
-			args += ' '
-		}
-	}
-*/
-	if v.pref.sanitize {
-		a << '-fsanitize=leak'
-	}
-	// Cross compiling linux
-	sysroot := '/Users/alex/tmp/lld/linuxroot/'
-	if v.os == .linux && !linux_host {
-		// Build file.o
-		a << '-c --sysroot=$sysroot -target x86_64-linux-gnu'
-		// Right now `out_name` can be `file`, not `file.o`
-		if !v.out_name.ends_with('.o') {
-			v.out_name = v.out_name + '.o'
-		}
-	}
-	// Cross compiling windows
-	// sysroot := '/Users/alex/tmp/lld/linuxroot/'
-	// Output executable name
-	// else {
-	a << '-o $v.out_name'
-	if os.dir_exists(v.out_name) {
-		panic('\'$v.out_name\' is a directory')
-	}
-	// The C file we are compiling
-	//a << '"$TmpPath/$v.out_name_c"'
-	a << '".$v.out_name_c"'
-	// }
-	// Min macos version is mandatory I think?
-	if v.os == .mac {
-		a << '-mmacosx-version-min=10.7'
-	}
-	a << flags
-	a << libs
-	// macOS code can include objective C  TODO remove once objective C is replaced with C
-	if v.os == .mac {
-		a << '-x objective-c'
-	}
-	// Without these libs compilation will fail on Linux
-	// || os.user_os() == 'linux' 
-	if v.pref.build_mode != .build && (v.os == .linux || v.os == .freebsd || v.os == .openbsd ||
-		v.os == .netbsd || v.os == .dragonfly) { 
-		a << '-lm -lpthread ' 
-		// -ldl is a Linux only thing. BSDs have it in libc.
-		if v.os == .linux {
-			a << ' -ldl ' 
-		} 
-	}
-	if v.os == .windows {
-		a << '-DUNICODE -D_UNICODE'
-	}
-	// Find clang executable
-	//fast_clang := '/usr/local/Cellar/llvm/8.0.0/bin/clang'
-	args := a.join(' ')
-	//mut cmd := if os.file_exists(fast_clang) {
-	//'$fast_clang $args'
-	//}
-	//else {
-	mut cmd := 'cc $args'
-	//}
-	$if windows {
-		cmd = 'gcc $args' 
-	}
-	if v.out_name.ends_with('.c') {
-		os.mv( '.$v.out_name_c', v.out_name )
-		exit(0)
-	}
-	// Run
-	if v.pref.show_c_cmd || v.pref.is_verbose {
-		println('\n==========')
-		println(cmd)
-	}    
-	ticks := time.ticks() 
-	_ := os.exec(cmd) or {
-		if v.pref.is_debug {
-			println(err)
-		} else {
-			print(err.limit(200))
-			if err.len > 200 {
-				println('...\n(Use `v -debug` to print the entire error message)\n')
-			}
-		}
-		panic('C error. This should never happen. ' +
-			'Please create a GitHub issue: https://github.com/vlang/v/issues/new/choose')
-	}
-	diff := time.ticks() - ticks 
-	// Print the C command
-	if v.pref.show_c_cmd || v.pref.is_verbose {
-		println('cc took $diff ms') 
-		println('=========\n')
-	}
-	// Link it if we are cross compiling and need an executable
-	if v.os == .linux && !linux_host && v.pref.build_mode != .build {
-		v.out_name = v.out_name.replace('.o', '')
-		obj_file := v.out_name + '.o'
-		println('linux obj_file=$obj_file out_name=$v.out_name')
-		ress := os.exec('/usr/local/Cellar/llvm/8.0.0/bin/ld.lld --sysroot=$sysroot ' +
-		'-v -o $v.out_name ' +
-		'-m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 ' +
-		'/usr/lib/x86_64-linux-gnu/crt1.o ' +
-		'$sysroot/lib/x86_64-linux-gnu/libm-2.28.a ' +
-		'/usr/lib/x86_64-linux-gnu/crti.o ' +
-		obj_file +
-		' /usr/lib/x86_64-linux-gnu/libc.so ' +
-		'/usr/lib/x86_64-linux-gnu/crtn.o') or {
-			panic(err)
-		}
-		println(ress)
-		println('linux cross compilation done. resulting binary: "$v.out_name"')
-	}
-	if !v.pref.is_debug && v.out_name_c != 'v.c' && v.out_name_c != 'v_macos.c' {
-		os.rm('.$v.out_name_c') 
-	} 
 }
 
 fn (v &V) v_files_from_dir(dir string) []string {
 	mut res := []string
 	if !os.file_exists(dir) {
-		panic('$dir doesn\'t exist')
+		cerror('$dir doesn\'t exist')
 	} else if !os.dir_exists(dir) {
-		panic('$dir isn\'t a directory')
+		cerror('$dir isn\'t a directory')
 	}
 	mut files := os.ls(dir)
 	if v.pref.is_verbose {
@@ -948,15 +476,15 @@ fn (v &V) v_files_from_dir(dir string) []string {
 		if file.ends_with('_win.v') && (v.os != .windows && v.os != .msvc) {
 			continue
 		}
-		if file.ends_with('_lin.v') && v.os != .linux { 
+		if file.ends_with('_lin.v') && v.os != .linux {
 			continue
 		}
-		if file.ends_with('_mac.v') && v.os != .mac { 
+		if file.ends_with('_mac.v') && v.os != .mac {
 			continue
-		} 
+		}
 		if file.ends_with('_nix.v') && (v.os == .windows || v.os == .msvc) {
-			continue 
-		} 
+			continue
+		}
 		res << '$dir/$file'
 	}
 	return res
@@ -1000,16 +528,16 @@ fn (v mut V) add_v_files_to_compile() {
 	}
 	// Parse builtin imports
 	for file in v.files {
-		mut p := v.new_parser(file, Pass.imports)
-		p.parse()
+		mut p := v.new_parser(file)
+		p.parse(.imports)
 	}
 	// Parse user imports
 	for file in user_files {
-		mut p := v.new_parser(file, Pass.imports)
-		p.parse()
+		mut p := v.new_parser(file)
+		p.parse(.imports)
 	}
 	// Parse lib imports
-/* 
+/*
 	if v.pref.build_mode == .default_mode {
 		// strange ( for mod in v.table.imports ) dosent loop all items
 		// for mod in v.table.imports {
@@ -1019,7 +547,7 @@ fn (v mut V) add_v_files_to_compile() {
 			import_path := '$ModPath/vlib/$mod_path'
 			vfiles := v.v_files_from_dir(import_path)
 			if vfiles.len == 0 {
-				panic('cannot import module $mod (no .v files in "$import_path").')
+				cerror('cannot import module $mod (no .v files in "$import_path").')
 			}
 			// Add all imports referenced by these libs
 			for file in vfiles {
@@ -1029,20 +557,20 @@ fn (v mut V) add_v_files_to_compile() {
 		}
 	}
 	else {
-*/ 
+*/
 	// strange ( for mod in v.table.imports ) dosent loop all items
 	// for mod in v.table.imports {
 	for i := 0; i < v.table.imports.len; i++ {
 		mod := v.table.imports[i]
-		import_path := v.find_module_path(mod) 
+		import_path := v.find_module_path(mod)
 		vfiles := v.v_files_from_dir(import_path)
 		if vfiles.len == 0 {
-			panic('cannot import module $mod (no .v files in "$import_path").')
+			cerror('cannot import module $mod (no .v files in "$import_path").')
 		}
 		// Add all imports referenced by these libs
 		for file in vfiles {
-			mut p := v.new_parser(file, Pass.imports)
-			p.parse()
+			mut p := v.new_parser(file)
+			p.parse(.imports)
 		}
 	}
 	if v.pref.is_verbose {
@@ -1050,29 +578,29 @@ fn (v mut V) add_v_files_to_compile() {
 		println(v.table.imports)
 	}
 	// graph deps
-	mut dep_graph := new_mod_dep_graph()
+	mut dep_graph := new_dep_graph()
 	dep_graph.from_import_tables(v.table.file_imports)
 	deps_resolved := dep_graph.resolve()
 	if !deps_resolved.acyclic {
 		deps_resolved.display()
-		panic('Import cycle detected.')
+		cerror('Import cycle detected.')
 	}
 	// add imports in correct order
 	for mod in deps_resolved.imports() {
-		// Building this module? Skip. TODO it's a hack. 
+		// Building this module? Skip. TODO it's a hack.
 		if mod == v.mod {
-			continue 
-		} 
-		mod_path := v.find_module_path(mod) 
+			continue
+		}
+		mod_path := v.find_module_path(mod)
 		// If we are in default mode, we don't parse vlib .v files, but header .vh files in
 		// TmpPath/vlib
 		// These were generated by vfmt
-/* 
+/*
 		if v.pref.build_mode == .default_mode || v.pref.build_mode == .build {
 			module_path = '$ModPath/vlib/$mod_p'
 		}
-*/ 
-		vfiles := v.v_files_from_dir(mod_path) 
+*/
+		vfiles := v.v_files_from_dir(mod_path)
 		for file in vfiles {
 			if !file in v.files {
 				v.files << file
@@ -1081,7 +609,7 @@ fn (v mut V) add_v_files_to_compile() {
 	}
 	// add remaining files (not modules)
 	for fit in v.table.file_imports {
-		//println('fit $fit.file_path') 
+		//println('fit $fit.file_path')
 		if !fit.file_path in v.files {
 			v.files << fit.file_path
 		}
@@ -1089,7 +617,11 @@ fn (v mut V) add_v_files_to_compile() {
 }
 
 fn get_arg(joined_args, arg, def string) string {
-	key := '-$arg '
+	return get_all_after(joined_args, '-$arg', def)
+}
+
+fn get_all_after(joined_args, arg, def string) string {
+	key := '$arg '
 	mut pos := joined_args.index(key)
 	if pos == -1 {
 		return def
@@ -1120,45 +652,46 @@ fn (v &V) log(s string) {
 	println(s)
 }
 
-fn new_v(args[]string) *V {
-	mut dir := args.last()
-	if args.contains('run') {
-		dir = args[2]
-	}
-	// println('new compiler "$dir"')
-	if args.len < 2 {
-		dir = ''
-	}
+fn new_v(args[]string) &V {
 	joined_args := args.join(' ')
 	target_os := get_arg(joined_args, 'os', '')
 	mut out_name := get_arg(joined_args, 'o', 'a.out')
+
+	mut dir := args.last()
+	if args.contains('run') {
+		dir = get_all_after(joined_args, 'run', '')
+	}
+	if args.len < 2 {
+		dir = ''
+	}
+	// println('new compiler "$dir"')
 	// build mode
 	mut build_mode := BuildMode.default_mode
-	mut mod := '' 
+	mut mod := ''
 	//if args.contains('-lib') {
-	if joined_args.contains('build module ') { 
-		build_mode = .build 
+	if joined_args.contains('build module ') {
+		build_mode = .build
 		// v -lib ~/v/os => os.o
-		mod = os.dir(dir) 
+		mod = os.dir(dir)
 		mod = mod.all_after('/')
 		println('Building module  "${mod}" dir="$dir"...')
 		//out_name = '$TmpPath/vlib/${base}.o'
 		out_name = mod + '.o'
 		// Cross compiling? Use separate dirs for each os
-/* 
+/*
 		if target_os != os.user_os() {
 			os.mkdir('$TmpPath/vlib/$target_os')
 			out_name = '$TmpPath/vlib/$target_os/${base}.o'
-			println('target_os=$target_os user_os=${os.user_os()}') 
+			println('target_os=$target_os user_os=${os.user_os()}')
 			println('!Cross compiling $out_name')
 		}
-*/ 
+*/
 	}
 	// TODO embed_vlib is temporarily the default mode. It's much slower.
 	else if !args.contains('-embed_vlib') {
 		build_mode = .embed_vlib
 	}
-	// 
+	//
 	is_test := dir.ends_with('_test.v')
 	is_script := dir.ends_with('.v')
 	if is_script && !os.file_exists(dir) {
@@ -1178,7 +711,7 @@ fn new_v(args[]string) *V {
 	// No OS specifed? Use current system
 	if target_os == '' {
 		$if linux {
-			_os = .linux 
+			_os = .linux
 		}
 		$if mac {
 			_os = .mac
@@ -1187,16 +720,16 @@ fn new_v(args[]string) *V {
 			_os = .windows
 		}
 		$if freebsd {
-			_os = .freebsd 
+			_os = .freebsd
 		}
 		$if openbsd {
-			_os = .openbsd 
+			_os = .openbsd
 		}
 		$if netbsd {
-			_os = .netbsd 
+			_os = .netbsd
 		}
 		$if dragonfly {
-			_os = .dragonfly 
+			_os = .dragonfly
 		}
 	}
 	else {
@@ -1204,10 +737,10 @@ fn new_v(args[]string) *V {
 		case 'linux': _os = .linux
 		case 'windows': _os = .windows
 		case 'mac': _os = .mac
-		case 'freebsd': _os = .freebsd 
-		case 'openbsd': _os = .openbsd 
-		case 'netbsd': _os = .netbsd 
-		case 'dragonfly': _os = .dragonfly 
+		case 'freebsd': _os = .freebsd
+		case 'openbsd': _os = .openbsd
+		case 'netbsd': _os = .netbsd
+		case 'dragonfly': _os = .dragonfly
 		case 'msvc': _os = .msvc
 		}
 	}
@@ -1221,17 +754,17 @@ fn new_v(args[]string) *V {
 	'option.v',
 	]
 	// Location of all vlib files
-	vroot := os.dir(os.executable()) 
-	//println('VROOT=$vroot') 
-	// v.exe's parent directory should contain vlib 
+	vroot := os.dir(os.executable())
+	//println('VROOT=$vroot')
+	// v.exe's parent directory should contain vlib
 	if os.dir_exists(vroot) && os.dir_exists(vroot + '/vlib/builtin') {
- 
+
 	}  else {
-		println('vlib not found. It should be next to the V executable. ')  
+		println('vlib not found. It should be next to the V executable. ')
 		println('Go to https://vlang.io to install V.')
-		exit(1) 
-	} 
-	mut out_name_c := out_name.all_after('/') + '.c'
+		exit(1)
+	}
+	mut out_name_c := os.realpath( out_name ) + '.tmp.c'
 	mut files := []string
 	// Add builtin files
 	if !out_name.contains('builtin.o') {
@@ -1257,7 +790,6 @@ fn new_v(args[]string) *V {
 		is_test: is_test
 		is_script: is_script
 		is_so: args.contains('-shared')
-		is_play: args.contains('play')
 		is_prod: args.contains('-prod')
 		is_verbose: args.contains('-verbose')
 		is_debuggable: args.contains('-g') // -debuggable implys debug
@@ -1273,89 +805,29 @@ fn new_v(args[]string) *V {
 		is_repl: args.contains('-repl')
 		build_mode: build_mode
 		cflags: cflags
-	}  
-
+		ccompiler: find_c_compiler()
+	}
+	if pref.is_verbose || pref.is_debug {
+		println('C compiler=$pref.ccompiler')
+	}
 	if pref.is_so {
 		out_name_c = out_name.all_after('/') + '_shared_lib.c'
 	}
-
-	return &V {
+	return &V{
 		os: _os
 		out_name: out_name
 		files: files
 		dir: dir
-		lang_dir: vroot 
+		lang_dir: vroot
 		table: new_table(obfuscate)
-		out_name: out_name
 		out_name_c: out_name_c
 		cgen: new_cgen(out_name_c)
-		vroot: vroot 
+		vroot: vroot
 		pref: pref
-		mod: mod 
+		mod: mod
 	}
 }
 
-fn run_repl() []string {
-	println('V $Version')
-	println('Use Ctrl-C or `exit` to exit')
-	file := '.vrepl.v'
-	temp_file := '.vrepl_temp.v'
-	defer {
-		os.rm(file) 
-		os.rm(temp_file) 
-		os.rm(file.left(file.len - 2))
-		os.rm(temp_file.left(temp_file.len - 2))
-	} 
-	mut lines := []string
-	vexe := os.args[0] 
-	for {
-		print('>>> ')
-		mut line := os.get_raw_line()
-		if line.trim_space() == '' && line.ends_with('\n') {
-			continue
-		}
-		line = line.trim_space()
-		if line.len == -1 || line == '' || line == 'exit' {
-			break
-		}
-		if line == '\n' {
-			continue
-		}
-		// Save the source only if the user is printing something,
-		// but don't add this print call to the `lines` array,
-		// so that it doesn't get called during the next print.
-		if line.starts_with('print') {
-			source_code := lines.join('\n') + '\n' + line 
-			os.write_file(file, source_code)
-			s := os.exec('$vexe run $file -repl') or {
-				panic(err)
-			}
-			vals := s.split('\n')
-			for i:=0; i < vals.len; i++ {
-				println(vals[i])
-			}
-		}
-		else {
-			mut temp_line := line
-			mut temp_flag := false
-			if !(line.contains(' ') || line.contains(':') || line.contains('=') || line.contains(',') ){
-				temp_line = 'println($line)'
-				temp_flag = true
-			}
-			temp_source_code := lines.join('\n') + '\n' + temp_line
-			os.write_file(temp_file, temp_source_code)
-			s := os.exec('$vexe run $temp_file -repl') or {
-				panic(err)
-			}
-			lines << line
-			vals := s.split('\n')
-			for i:=0; i<vals.len; i++ {
-				println(vals[i])
-			}
-		}
-	}
-	return lines
-}
 
 const (
 	HelpText = '
@@ -1365,16 +837,16 @@ Options:
   -                 Read from stdin (Default; Interactive mode if in a tty)
   -h, help          Display this information.
   -v, version       Display compiler version.
-  -lib              Generate object file.
   -prod             Build an optimized executable.
   -o <file>         Place output into <file>.
   -obf              Obfuscate the resulting binary.
-  -show_c_cmd       Print the full C compilation command and how much time it took. 
-  -debug            Leave a C file for debugging in .program.c. 
-  -live             Enable hot code reloading (required by functions marked with [live]). 
-  fmt               Run vfmt to format the source code. 
-  up                Update V. 
+  -show_c_cmd       Print the full C compilation command and how much time it took.
+  -debug            Leave a C file for debugging in .program.c.
+  -live             Enable hot code reloading (required by functions marked with [live]).
+  fmt               Run vfmt to format the source code.
+  up                Update V.
   run               Build and execute a V program. You can add arguments after the file name.
+  build module      Compile a module into an object file.
 
 
 Files:
@@ -1382,48 +854,120 @@ Files:
 '
 )
 
-/* 
-- To disable automatic formatting: 
+/*
+- To disable automatic formatting:
 v -nofmt file.v
 
 - To build a program with an embedded vlib  (use this if you do not have prebuilt vlib libraries or if you
-are working on vlib) 
-v -embed_vlib file.v 
+are working on vlib)
+v -embed_vlib file.v
 */
 
 fn env_vflags_and_os_args() []string {
    mut args := []string
    vflags := os.getenv('VFLAGS')
    if '' != vflags {
-     args << os.args[0]
-     args << vflags.split(' ')
-     if os.args.len > 1 {
-       args << os.args.right(1)
-     }
+	 args << os.args[0]
+	 args << vflags.split(' ')
+	 if os.args.len > 1 {
+	   args << os.args.right(1)
+	 }
    }else{
-     args << os.args
+	 args << os.args
    }
    return args
 }
 
 fn update_v() {
-	println('Updating V...') 
-	vroot := os.dir(os.executable()) 
+	println('Updating V...')
+	vroot := os.dir(os.executable())
 	s := os.exec('git -C "$vroot" pull --rebase origin master') or {
-		panic(err)
+		cerror(err)
+		return
 	}
-	println(s) 
-	$if windows { 
-		os.mv('$vroot/v.exe', '$vroot/v_old.exe') 
+	println(s.output)
+	$if windows {
+		os.mv('$vroot/v.exe', '$vroot/v_old.exe')
 		s2 := os.exec('$vroot/make.bat') or {
-			panic(err)
+			cerror(err)
+			return
 		}
-		println(s2) 
-	} $else { 
+		println(s2.output)
+	} $else {
 		s2 := os.exec('make -C "$vroot"') or {
-			panic(err)
+			cerror(err)
+			return
 		}
-		println(s2) 
-	} 
-} 
+		println(s2.output)
+	}
+}
 
+fn test_v() {
+	args := env_vflags_and_os_args()
+	vexe := args[0]
+	// Emily: pass args from the invocation to the test
+	// e.g. `v -g -os msvc test v` -> `$vexe -g -os msvc $file`
+	mut joined_args := env_vflags_and_os_args().right(1).join(' ')
+	joined_args = joined_args.left(joined_args.last_index('test'))
+	println('$joined_args')
+	mut failed := false
+	test_files := os.walk_ext('.', '_test.v')
+	for dot_relative_file in test_files {
+		relative_file := dot_relative_file.replace('./', '')
+		file := os.realpath( relative_file )
+		tmpcfilepath := file.replace('_test.v', '_test.tmp.c')
+		print(relative_file + ' ')
+		r := os.exec('$vexe $joined_args -debug $file') or {
+			failed = true
+			println('FAIL')
+			continue
+		}
+		if r.exit_code != 0 {
+			println('FAIL `$file` (\n$r.output\n)')
+			failed = true
+		} else {
+			println('OK')
+		}
+		os.rm( tmpcfilepath )
+	}
+	println('\nBuilding examples...')
+	examples := os.walk_ext('examples', '.v')
+	for relative_file in examples {
+		file := os.realpath( relative_file )
+		tmpcfilepath := file.replace('.v', '.tmp.c')
+		print(relative_file + ' ')
+		r := os.exec('$vexe $joined_args -debug $file') or {
+			failed = true
+			println('FAIL')
+			continue
+		}
+		if r.exit_code != 0 {
+			println('FAIL `$file` (\n$r.output\n)')
+			failed = true
+		} else {
+			println('OK')
+		}
+		os.rm(tmpcfilepath)
+	}
+	if failed {
+		exit(1)
+	}
+}
+
+fn create_symlink() {
+	vexe := os.executable()
+	link_path := '/usr/local/bin/v'
+	ret := os.system('ln -sf $vexe $link_path')
+	if ret == 0 {
+		println('symlink "$link_path" has been created')
+	} else {
+		println('failed to create symlink "$link_path", '+
+			'make sure you run with sudo')
+	}
+}
+
+pub fn cerror(s string) {
+	println('V error: $s')
+	os.flush_stdout()
+	exit(1)
+}
